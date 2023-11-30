@@ -144,7 +144,7 @@ def linear_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
         c.stride(0),
         c.stride(1),
     )
-    return c.view(*tmp_shape, b.shape[-1])
+    return c.view(*tmp_shape, b.shape[0])
 
 
 @gemm_autotune()
@@ -275,7 +275,7 @@ def linear_relu_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None
         c.stride(0),
         c.stride(1),
     )
-    return c.view(*tmp_shape, b.shape[-1])
+    return c.view(*tmp_shape, b.shape[0])
 
 
 @gemm_autotune()
@@ -404,7 +404,7 @@ def linear_a8_w8_b32_o32(a, b, bias, out=None):
         c.stride(0),
         c.stride(1),
     )
-    return c.view(*tmp_shape, b.shape[-1])
+    return c.view(*tmp_shape, b.shape[0])
 
 
 @gemm_autotune()
@@ -539,7 +539,7 @@ def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
         c.stride(0),
         c.stride(1),
     )
-    return c.view(*tmp_shape, b.shape[-1])
+    return c.view(*tmp_shape, b.shape[0])
 
 
 @gemm_autotune()
@@ -674,7 +674,8 @@ def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None)
         c.stride(0),
         c.stride(1),
     )
-    return c.view(*tmp_shape, b.shape[-1])
+    return c.view(*tmp_shape, b.shape[0])
+
 
 def test_correct_int8(M=32, N=4096, K=4096):
     a = torch.randn((M, K), device="cuda", dtype=torch.float32)
@@ -779,5 +780,91 @@ def test_correct_int8(M=32, N=4096, K=4096):
     )
 
 
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=["M"],  # Argument names to use as an x-axis for the plot
+        x_vals=[32, 64, 128, 256]
+        + [512 * i * 2 for i in range(1, 17)],  # Different possible values for `x_name`
+        line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
+        # Possible values for `line_arg`
+        line_vals=["cutlass", "triton-i8", "triton-i8-fp16", "triton-i8-bf16"],
+        # Label name for the lines
+        line_names=["cutlass", "triton-i8", "triton-i8-fp16", "triton-i8-bf16"],
+        # Line styles
+        styles=[("green", "-"), ("blue", "-"), ("red", "-"), ("purple", "-")],
+        ylabel="ms",  # Label name for the y-axis
+        plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
+        args={},
+    )
+)
+def benchmark(M, provider):
+    K = 10240
+    N = 27392 * 2 // 8
+    quantiles = [0.5, 0.2, 0.8]
+    if provider == "cutlass":
+        a = (
+            torch.randn((M, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        b = (
+            torch.randn((N, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        bias = torch.randn((N), device="cuda", dtype=torch.float32).contiguous()
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: linear_a8_w8_bfp32_ofp32_cuda(a, b, bias, 1, 1), quantiles=quantiles
+        )
+    if provider == "triton-i8":
+        a = (
+            torch.randn((M, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        b = (
+            torch.randn((N, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        bias = torch.randn((N), device="cuda", dtype=torch.float32).contiguous()
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+        )
+    if provider == "triton-i8-fp16":
+        a = (
+            torch.randn((M, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        b = (
+            torch.randn((N, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        bias = torch.randn((N), device="cuda", dtype=torch.float16).contiguous()
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+        )
+
+    if provider == "triton-i8-bf16":
+        a = (
+            torch.randn((M, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        b = (
+            torch.randn((N, K), device="cuda", dtype=torch.float16)
+            .to(torch.int8)
+            .contiguous()
+        )
+        bias = torch.randn((N), device="cuda", dtype=torch.bfloat16).contiguous()
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+        )
+    return ms, min_ms, max_ms
+
+
 if __name__ == "__main__":
-    test_correct_int8()
+    # test_correct_int8()
+    benchmark.run(show_plots=False, print_data=True)
