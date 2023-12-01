@@ -47,7 +47,6 @@ def kernel_linear_a8_w8_b8_o8(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -74,8 +73,8 @@ def kernel_linear_a8_w8_b8_o8(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -89,15 +88,23 @@ def kernel_linear_a8_w8_b8_o8(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        a = tl.load(
+            a_ptrs,
+            mask=(offs_k[None, :] < K - k * BLOCK_SIZE_K) & (offs_am[:, None] < M),
+            other=0.0,
+        )
+        b = tl.load(
+            b_ptrs,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N),
+            other=0.0,
+        )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
+    bias = tl.load(bias_ptrs, mask=offs_bn[None, :] < N, other=0)
     c = (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
         tl.int8
     )
@@ -125,7 +132,6 @@ def linear_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
         c = out.fill_(0)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
     )
     kernel_linear_a8_w8_b8_o8[grid](
         a,
@@ -175,7 +181,6 @@ def kernel_linear_relu_a8_w8_b8_o8(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -202,8 +207,8 @@ def kernel_linear_relu_a8_w8_b8_o8(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -217,15 +222,23 @@ def kernel_linear_relu_a8_w8_b8_o8(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        a = tl.load(
+            a_ptrs,
+            mask=(offs_k[None, :] < K - k * BLOCK_SIZE_K) & (offs_am[:, None] < M),
+            other=0.0,
+        )
+        b = tl.load(
+            b_ptrs,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N),
+            other=0.0,
+        )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
+    bias = tl.load(bias_ptrs, mask=(offs_bn[None, :] < N), other=0)
     c = tl.maximum(
         (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
             tl.int8
@@ -256,7 +269,6 @@ def linear_relu_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None
         c = out.fill_(0)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
     )
     kernel_linear_relu_a8_w8_b8_o8[grid](
         a,
@@ -304,7 +316,6 @@ def kernel_linear_a8_w8_b32_o32(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -331,8 +342,8 @@ def kernel_linear_a8_w8_b32_o32(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -343,22 +354,26 @@ def kernel_linear_a8_w8_b32_o32(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs,
+            mask=(offs_k[None, :] < K - k * BLOCK_SIZE_K) & (offs_am[:, None] < M),
+            other=0.0,
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N),
+            other=0.0,
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
+    bias = tl.load(bias_ptrs, mask=offs_bn[None, :] < N, other=0)
     accumulator += bias
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
@@ -366,10 +381,7 @@ def kernel_linear_a8_w8_b32_o32(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, accumulator, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, accumulator, mask=c_mask)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
 def linear_a8_w8_b32_o32(a, b, bias, out=None):
@@ -387,7 +399,6 @@ def linear_a8_w8_b32_o32(a, b, bias, out=None):
         c = out.fill_(0)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
     )
     kernel_linear_a8_w8_b32_o32[grid](
         a,
@@ -435,7 +446,6 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -462,8 +472,8 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -474,22 +484,26 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs,
+            mask=(offs_k[None, :] < K - k * BLOCK_SIZE_K) & (offs_am[:, None] < M),
+            other=0.0,
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N),
+            other=0.0,
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
+    bias = tl.load(bias_ptrs, mask=offs_bn[None, :] < N, other=0)
     c = (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
         tl.int32
     )
@@ -499,10 +513,7 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, c, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, c, mask=c_mask)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
 def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
@@ -520,7 +531,6 @@ def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
         c = out.fill_(0)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
     )
     kernel_linear_a8_w8_b32_o32_with_scaling[grid](
         a,
@@ -570,7 +580,6 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -597,8 +606,8 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -609,22 +618,27 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs,
+            mask=(offs_k[None, :] < K - k * BLOCK_SIZE_K) & (offs_am[:, None] < M),
+            other=0.0,
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N),
+            other=0.0,
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
+        # accumulator += tl.dot(a.to(tl.float32), b.to(tl.float32)).to(tl.int32)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
+    bias = tl.load(bias_ptrs, mask=offs_bn[None, :] < N, other=0)
     c = accumulator.to(tl.float32) * scale_a + bias * scale_b
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
@@ -632,10 +646,7 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
+    tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
 
 
 def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None):
@@ -655,7 +666,6 @@ def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None)
         c = out.fill_(0)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
     )
     kernel_linear_a8_w8_bfp32_ofp32[grid](
         a,
@@ -677,6 +687,7 @@ def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None)
     return c.view(*tmp_shape, b.shape[0])
 
 
+@torch.no_grad()
 def test_correct_int8(M=32, N=4096, K=4096):
     a = torch.randn((M, K), device="cuda", dtype=torch.float32)
     b = torch.randn((N, K), device="cuda", dtype=torch.float32)
@@ -866,5 +877,5 @@ def benchmark(M, provider):
 
 
 if __name__ == "__main__":
-    # test_correct_int8()
+    test_correct_int8()
     benchmark.run(show_plots=False, print_data=True)

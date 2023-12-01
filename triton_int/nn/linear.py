@@ -245,21 +245,21 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
     def _apply(self, fn):
         # prevent the bias from being converted to half
         super()._apply(fn)
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         return self
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.weight = self.weight.to(*args, **kwargs)
         self.bias = self.bias.to(*args, **kwargs)
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         return self
 
     @torch.no_grad()
     def forward(self, x):
         x_shape = x.shape
         x = x.view(-1, x_shape[-1])
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         y = linear_a8_w8_bfp32_ofp32(x, self.weight, self.bias, self.a.item(), 1)
         y = y.view(*x_shape[:-1], -1)
         return y
@@ -303,21 +303,21 @@ class DanymicW8A8BFP32OFP32Linear(torch.nn.Module):
     def _apply(self, fn):
         # prevent the bias from being converted to half
         super()._apply(fn)
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         return self
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.weight = self.weight.to(*args, **kwargs)
         self.bias = self.bias.to(*args, **kwargs)
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         return self
 
     @torch.no_grad()
     def forward(self, x):
         x_shape = x.shape
         x = x.view(-1, x_shape[-1])
-        self.bias = self.bias.to(torch.float32)
+        self.bias = self.bias
         x, scale = quantize_per_tensor_absmax(x)
         y = linear_a8_w8_bfp32_ofp32(
             x, self.weight, self.bias, (scale * self.weight_scale).item(), 1

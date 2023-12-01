@@ -5,10 +5,10 @@ import triton
 import triton.language as tl
 
 from triton_int.functional.quantization import quantize_per_tensor_absmax
-from triton_int.kernels.utils import gemm_autotune
+from triton_int.kernels.utils import bmm_autotune
 
 
-@gemm_autotune()
+@bmm_autotune()
 @triton.jit
 def kernel_bmm_s8t_s8t_s32t(
     # Pointers to matrices
@@ -130,7 +130,7 @@ def bmm_s8t_s8t_s32t(a, b, out=None):
     return c
 
 
-@gemm_autotune()
+@bmm_autotune()
 @triton.jit
 def kernel_bmm_s8t_s8n_s32t(
     # Pointers to matrices
@@ -255,7 +255,7 @@ def bmm_s8t_s8n_s32t(a, b, out=None):
     return c.view(*tmp_shape, b.shape[-1])
 
 
-@gemm_autotune()
+@bmm_autotune()
 @triton.jit
 def kernel_bmm_s8t_s8n_f32t(
     # Pointers to matrices
@@ -383,7 +383,7 @@ def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
     return c.view(*tmp_shape, b.shape[-1])
 
 
-@gemm_autotune()
+@bmm_autotune()
 @triton.jit
 def kernel_bmm_s8t_s8n_s8t(
     # Pointers to matrices
