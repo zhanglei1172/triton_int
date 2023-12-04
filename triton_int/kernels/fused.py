@@ -1,3 +1,4 @@
+import math
 import time
 
 import torch
@@ -6,6 +7,9 @@ import triton.language as tl
 
 from triton_int.functional.quantization import quantize_per_tensor_absmax
 from triton_int.kernels.utils import gemm_autotune
+
+sqrt2pi = math.sqrt(2.0 / math.pi)
+sqrt2 = math.sqrt(2.0)
 
 
 @triton.jit
@@ -53,3 +57,25 @@ def kernel_dq_add_layernorm_q(
         y = x_hat * w + b
         # Write output
         tl.store(Y + cols, y, mask=mask)
+
+
+@triton.jit
+def tanh(x):
+    """Tanh activation function"""
+    return tl.math.tanh(x)
+
+
+@triton.jit
+def fast_gelu(x):
+    """Fast approximation of the gelu function. May slightly decrease accuracy."""
+    return 0.5 * x * (1 + tanh(sqrt2pi * (x + 0.044715 * x * x * x)))
+
+@triton.jit
+def fast_geluQ(x, scale):
+    """Fast approximation of the gelu function. May slightly decrease accuracy."""
+    return 0.5 * x * (1 + tanh(sqrt2pi * (x + 0.044715 * x * x * x))) * scale
+
+@triton.jit
+def gelu(x):
+    """Gaussian Error Linear Unit (GELU)"""
+    return x * 0.5 * (1.0 + tl.math.erf(x / sqrt2))

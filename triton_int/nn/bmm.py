@@ -1,10 +1,6 @@
 import torch
 
-from triton_int.kernels.bmm import (
-    bmm_s8t_s8n_f32t,
-    bmm_s8t_s8n_s8t,
-    bmm_s8t_s8n_s32t,
-)
+from triton_int.kernels.bmm import bmm_s8t_s8n_f32t, bmm_s8t_s8n_s8t, bmm_s8t_s8n_s32t
 
 
 class BMM_S8T_S8N_S8T(torch.nn.Module):
@@ -61,7 +57,7 @@ class BMM_S8T_S8N_F16T(torch.nn.Module):
         # a: [B, M, K] int8
         # b: [B, N, K] int8
         # return: [B, M, N] int32
-        return bmm_s8t_s8n_f16t(a, b, self.a.item())
+        return bmm_s8t_s8n_f32t(a, b, self.a.item(), dtype=torch.float16)
 
     @staticmethod
     def from_scale(a_scale, b_scale):
@@ -83,7 +79,7 @@ class BMM_S8T_S8N_BF16T(torch.nn.Module):
         # a: [B, M, K] int8
         # b: [B, N, K] int8
         # return: [B, M, N] int32
-        return bmm_s8t_s8n_bf16t(a, b, self.a.item())
+        return bmm_s8t_s8n_f32t(a, b, self.a.item(), dtype=torch.bfloat16)
 
     @staticmethod
     def from_scale(a_scale, b_scale):
