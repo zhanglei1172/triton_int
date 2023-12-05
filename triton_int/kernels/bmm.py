@@ -426,7 +426,7 @@ def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
     B, N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=torch.float32)
+        c = torch.zeros((B, M, N), device=a.device, dtype=dtype)
     else:
         c = out.fill_(0)
     grid = lambda META: (
