@@ -396,7 +396,7 @@ def kernel_bmm_s8t_s8n_f32t(
         b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
     # You can fuse arbitrary activation functions here
 
-    c = accumulator.to(tl.float32) * scale
+    c = accumulator.to(tl.float32) * tl.load(scale)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -542,7 +542,7 @@ def kernel_bmm_s8t_s8n_s8t(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    c = (accumulator.to(tl.float32) * scale).to(tl.int8)
+    c = (accumulator.to(tl.float32) * tl.load(scale)).to(tl.int8)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -685,7 +685,7 @@ def kernel_bmm_s8t_s8t_s8t(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    c = (accumulator.to(tl.float32) * scale).to(tl.int8)
+    c = (accumulator.to(tl.float32) * tl.load(scale)).to(tl.int8)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)

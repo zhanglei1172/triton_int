@@ -60,7 +60,7 @@ class GeLu_Q(torch.nn.Module):
         self.register_buffer("a", torch.tensor(alpha))
 
     def forward(self, x):
-        return fast_geluQ(x.to(torch.float32), self.a.item()).to(x.dtype)
+        return fast_geluQ(x.to(torch.float32), self.a).to(x.dtype)
 
 
 class W8A8BFP32OFP32_GeLu_Q(torch.nn.Module):
@@ -106,7 +106,7 @@ class W8A8BFP32OFP32_GeLu_Q(torch.nn.Module):
         x = x.view(-1, x_shape[-1])
         self.bias = self.bias
         y = linear_a8_w8_bfp32_ofp32_GeLu_Q(
-            x, self.weight, self.bias, self.a.item(), self.b.item()
+            x, self.weight, self.bias, self.a, self.b
         )
         y = y.view(*x_shape[:-1], -1)
         return y

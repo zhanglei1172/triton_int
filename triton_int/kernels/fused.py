@@ -168,7 +168,7 @@ def kernel_linear_a8_w8_bfp32_ofp32_GeLu_Q(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = fast_geluQ(accumulator.to(tl.float32) * scale_a + bias, scale_b).to(c_ptr.dtype.element_ty)
+    c = fast_geluQ(accumulator.to(tl.float32) * tl.load(scale_a) + bias, tl.load(scale_b)).to(c_ptr.dtype.element_ty)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)

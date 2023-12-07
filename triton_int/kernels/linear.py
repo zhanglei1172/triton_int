@@ -98,7 +98,7 @@ def kernel_linear_a8_w8_ofp32(
         a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
     # You can fuse arbitrary activation functions here
-    c = (scale * accumulator).to(c_ptr.dtype.element_ty)
+    c = (tl.load(scale) * accumulator).to(c_ptr.dtype.element_ty)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -231,7 +231,7 @@ def kernel_linear_a8_w8_b8_o8(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
+    c = (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
         tl.int8
     )
     # -----------------------------------------------------------
@@ -366,7 +366,7 @@ def kernel_linear_relu_a8_w8_b8_o8(
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
     c = tl.maximum(
-        (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
+        (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
             tl.int8
         ),
         0,
@@ -630,7 +630,7 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = (accumulator.to(tl.float32) * scale_a + bias.to(tl.float32) * scale_b).to(
+    c = (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
         tl.int32
     )
     # -----------------------------------------------------------
@@ -765,7 +765,7 @@ def kernel_linear_a8_w8_bfp32_ofp32(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = accumulator.to(tl.float32) * scale_a + bias * scale_b
+    c = accumulator.to(tl.float32) * tl.load(scale_a) + bias * tl.load(scale_b)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
