@@ -45,7 +45,6 @@ def kernel_linear_a8_w8_ofp32(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -72,8 +71,18 @@ def kernel_linear_a8_w8_ofp32(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -83,20 +92,16 @@ def kernel_linear_a8_w8_ofp32(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
-        )
-        b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
-        )
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     c = (tl.load(scale) * accumulator).to(c_ptr.dtype.element_ty)
     # -----------------------------------------------------------
@@ -105,10 +110,7 @@ def kernel_linear_a8_w8_ofp32(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, c, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, c, mask=c_mask)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
 def linear_a8_w8_ofp32(a, b, scale, out=None, dtype=torch.float):
@@ -121,9 +123,7 @@ def linear_a8_w8_ofp32(a, b, scale, out=None, dtype=torch.float):
     N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((M, N), device=a.device, dtype=dtype)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=dtype)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -199,8 +199,18 @@ def kernel_linear_a8_w8_b8_o8(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) % M
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -231,9 +241,10 @@ def kernel_linear_a8_w8_b8_o8(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
-        tl.int8
-    )
+    c = (
+        accumulator.to(tl.float32) * tl.load(scale_a)
+        + bias.to(tl.float32) * tl.load(scale_b)
+    ).to(tl.int8)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -253,9 +264,7 @@ def linear_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
     N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((M, N), device=a.device, dtype=torch.int8)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -333,8 +342,18 @@ def kernel_linear_relu_a8_w8_b8_o8(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) % M
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -366,9 +385,10 @@ def kernel_linear_relu_a8_w8_b8_o8(
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
     c = tl.maximum(
-        (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
-            tl.int8
-        ),
+        (
+            accumulator.to(tl.float32) * tl.load(scale_a)
+            + bias.to(tl.float32) * tl.load(scale_b)
+        ).to(tl.int8),
         0,
     )
     # -----------------------------------------------------------
@@ -390,9 +410,7 @@ def linear_relu_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None
     N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((M, N), device=a.device, dtype=torch.int8)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -468,8 +486,18 @@ def kernel_linear_a8_w8_b32_o32(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) % M
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -520,9 +548,7 @@ def linear_a8_w8_b32_o32(a, b, bias, out=None):
     N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((M, N), device=a.device, dtype=torch.int32)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -598,8 +624,18 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) % M
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -630,9 +666,10 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     bias = tl.load(bias_ptrs)
-    c = (accumulator.to(tl.float32) * tl.load(scale_a) + bias.to(tl.float32) * tl.load(scale_b)).to(
-        tl.int32
-    )
+    c = (
+        accumulator.to(tl.float32) * tl.load(scale_a)
+        + bias.to(tl.float32) * tl.load(scale_b)
+    ).to(tl.int32)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -652,9 +689,7 @@ def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
     N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((M, N), device=a.device, dtype=torch.int32)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -732,8 +767,18 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) % M
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -787,9 +832,7 @@ def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None)
     if out == None:
         if dtype is None:
             dtype = bias.dtype
-        c = torch.zeros((M, N), device=a.device, dtype=dtype)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((M, N), device=a.device, dtype=dtype)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )

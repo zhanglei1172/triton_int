@@ -36,7 +36,6 @@ def kernel_bmm_s8t_s8t_s32t(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -64,8 +63,18 @@ def kernel_bmm_s8t_s8t_s32t(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
@@ -83,20 +92,20 @@ def kernel_bmm_s8t_s8t_s32t(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
 
     # -----------------------------------------------------------
@@ -110,10 +119,7 @@ def kernel_bmm_s8t_s8t_s32t(
         + pid_batch * stride_batch_c
     )
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, accumulator, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, accumulator, mask=c_mask)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
 def bmm_s8t_s8t_s32t(a, b, out=None):
@@ -128,9 +134,7 @@ def bmm_s8t_s8t_s32t(a, b, out=None):
     B, K, N = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=torch.int32)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((B, M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         META["SPLIT_K"],
@@ -184,7 +188,6 @@ def kernel_bmm_s8t_s8n_s32t(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -212,8 +215,18 @@ def kernel_bmm_s8t_s8n_s32t(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
@@ -231,20 +244,20 @@ def kernel_bmm_s8t_s8n_s32t(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
 
     # -----------------------------------------------------------
@@ -258,10 +271,7 @@ def kernel_bmm_s8t_s8n_s32t(
         + pid_batch * stride_batch_c
     )
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, accumulator, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, accumulator, mask=c_mask)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
 def bmm_s8t_s8n_s32t(a, b, out=None):
@@ -276,9 +286,7 @@ def bmm_s8t_s8n_s32t(a, b, out=None):
     B, N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=torch.int32)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((B, M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         META["SPLIT_K"],
@@ -333,7 +341,6 @@ def kernel_bmm_s8t_s8n_f32t(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -361,8 +368,18 @@ def kernel_bmm_s8t_s8n_f32t(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
@@ -380,20 +397,20 @@ def kernel_bmm_s8t_s8n_f32t(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(
-            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0
         )
         b = tl.load(
-            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K * SPLIT_K, other=0.0
+            b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
 
     c = accumulator.to(tl.float32) * tl.load(scale)
@@ -408,10 +425,7 @@ def kernel_bmm_s8t_s8n_f32t(
         + pid_batch * stride_batch_c
     )
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
+    tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
 
 
 def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
@@ -426,9 +440,7 @@ def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
     B, N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=dtype)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((B, M, N), device=a.device, dtype=dtype)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         META["SPLIT_K"],
@@ -484,7 +496,6 @@ def kernel_bmm_s8t_s8n_s8t(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -512,8 +523,18 @@ def kernel_bmm_s8t_s8n_s8t(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
@@ -569,9 +590,7 @@ def bmm_s8t_s8n_s8t(a, b, scale: float, out=None):
     B, N, K = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=torch.int8)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((B, M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         META["SPLIT_K"],
@@ -627,7 +646,6 @@ def kernel_bmm_s8t_s8t_s8t(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    SPLIT_K: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -655,8 +673,18 @@ def kernel_bmm_s8t_s8t_s8t(
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_am = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
+    offs_bn = tl.max_contiguous(
+        tl.multiple_of(
+            (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N, BLOCK_SIZE_M
+        ),
+        BLOCK_SIZE_M,
+    )
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
@@ -712,9 +740,7 @@ def bmm_s8t_s8t_s8t(a, b, scale: float, out=None):
     B, K, N = b.shape
     # Allocates output.
     if out == None:
-        c = torch.zeros((B, M, N), device=a.device, dtype=torch.int8)
-    else:
-        c = out.fill_(0)
+        c = torch.empty((B, M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         META["SPLIT_K"],
