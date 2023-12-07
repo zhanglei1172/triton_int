@@ -214,13 +214,16 @@ def kernel_linear_a8_w8_b8_o8(
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    bias_ptrs = bias_ptr + offs_bn[None, :]
+    bias_ptrs = bias_ptr + offs_bn
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    bias = tl.load(bias_ptrs)
+    c += bias[None, :] * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -240,18 +243,14 @@ def kernel_linear_a8_w8_b8_o8(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
-    c = (
-        accumulator.to(tl.float32) * tl.load(scale_a)
-        + bias.to(tl.float32) * tl.load(scale_b)
-    ).to(tl.int8)
+    c += accumulator.to(tl.float32) * tl.load(scale_a)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+    tl.store(c_ptrs, c.to(tl.int8), mask=c_mask)
 
 
 def linear_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
@@ -357,13 +356,16 @@ def kernel_linear_relu_a8_w8_b8_o8(
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    bias_ptrs = bias_ptr + offs_bn[None, :]
+    bias_ptrs = bias_ptr + offs_bn
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    bias = tl.load(bias_ptrs)
+    c += bias[None, :] * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -383,21 +385,15 @@ def kernel_linear_relu_a8_w8_b8_o8(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
-    c = tl.maximum(
-        (
-            accumulator.to(tl.float32) * tl.load(scale_a)
-            + bias.to(tl.float32) * tl.load(scale_b)
-        ).to(tl.int8),
-        0,
-    )
+    c += accumulator.to(tl.float32) * tl.load(scale_a)
+
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+    tl.store(c_ptrs, tl.maximum(c.to(tl.int8), 0), mask=c_mask)
 
 
 def linear_relu_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
@@ -501,13 +497,15 @@ def kernel_linear_a8_w8_b32_o32(
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    bias_ptrs = bias_ptr + offs_bn[None, :]
+    bias_ptrs = bias_ptr + offs_bn
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    bias = tl.load(bias_ptrs)
+    accumulator += bias[None, :]
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -527,8 +525,7 @@ def kernel_linear_a8_w8_b32_o32(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
-    accumulator += bias
+    # c += accumulator
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -639,13 +636,16 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    bias_ptrs = bias_ptr + offs_bn[None, :]
+    bias_ptrs = bias_ptr + offs_bn
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    bias = tl.load(bias_ptrs)
+    c += bias[None, :] * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -665,18 +665,15 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
-    c = (
-        accumulator.to(tl.float32) * tl.load(scale_a)
-        + bias.to(tl.float32) * tl.load(scale_b)
-    ).to(tl.int32)
+    c += accumulator.to(tl.float32) * tl.load(scale_a)
+
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+    tl.store(c_ptrs, c.to(tl.int32), mask=c_mask)
 
 
 def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
@@ -782,13 +779,16 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    bias_ptrs = bias_ptr + offs_bn[None, :]
+    bias_ptrs = bias_ptr + offs_bn
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    bias = tl.load(bias_ptrs)
+    c += bias[None, :] * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -809,8 +809,8 @@ def kernel_linear_a8_w8_bfp32_ofp32(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
-    bias = tl.load(bias_ptrs)
-    c = accumulator.to(tl.float32) * tl.load(scale_a) + bias * tl.load(scale_b)
+
+    c += accumulator.to(tl.float32) * tl.load(scale_a)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -857,7 +857,7 @@ def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None)
 
 
 @torch.no_grad()
-def test_correct_int8(M=32, N=4096, K=4096):
+def test_correct_int8(M=16384, N=4096, K=4096):
     a = torch.randn((M, K), device="cuda", dtype=torch.float32)
     b = torch.randn((N, K), device="cuda", dtype=torch.float32)
     bias = torch.randn((N), device="cuda", dtype=torch.float32)
@@ -878,8 +878,8 @@ def test_correct_int8(M=32, N=4096, K=4096):
         int_a,
         int_b,
         int_bias,
-        (scale_a * scale_b / scale_out).item(),
-        (scale_bias / scale_out).item(),
+        (scale_a * scale_b / scale_out),
+        (scale_bias / scale_out),
     ).float() * (scale_out)
     cuda_output = linear_a8_w8_b8_o8_cuda(
         int_a,
@@ -916,8 +916,8 @@ def test_correct_int8(M=32, N=4096, K=4096):
         int_a,
         int_b,
         int32_bias,
-        (scale_a * scale_b / scale_out).item(),
-        (bias_scale / scale_out).item(),
+        (scale_a * scale_b / scale_out),
+        (bias_scale / scale_out),
     )
     cuda_output = linear_a8_w8_b32_o32_with_scaling_cuda(
         int_a,
@@ -931,7 +931,7 @@ def test_correct_int8(M=32, N=4096, K=4096):
     )
 
     triton_output = linear_a8_w8_bfp32_ofp32(
-        int_a, int_b, bias, (scale_a * scale_b).item(), 1
+        int_a, int_b, bias, (scale_a * scale_b), torch.tensor(1.0, device="cuda")
     )
     cuda_output = linear_a8_w8_bfp32_ofp32_cuda(
         int_a, int_b, bias, (scale_a * scale_b).item(), 1
@@ -945,8 +945,8 @@ def test_correct_int8(M=32, N=4096, K=4096):
         int_a,
         int_b,
         int_bias,
-        (scale_a * scale_b / relu_scale_out).item(),
-        (scale_bias / relu_scale_out).item(),
+        (scale_a * scale_b / relu_scale_out),
+        (scale_bias / relu_scale_out),
     ).float() * (relu_scale_out)
     cuda_output = linear_relu_a8_w8_b8_o8_cuda(
         int_a,
@@ -994,7 +994,14 @@ def benchmark(M, provider):
         )
         bias = torch.randn((N), device="cuda", dtype=torch.float32).contiguous()
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: linear_a8_w8_bfp32_ofp32_cuda(a, b, bias, 1, 1), quantiles=quantiles
+            lambda: linear_a8_w8_bfp32_ofp32_cuda(
+                a,
+                b,
+                bias,
+                torch.tensor(1.0, device="cuda"),
+                torch.tensor(1.0, device="cuda"),
+            ),
+            quantiles=quantiles,
         )
     if provider == "triton-i8":
         a = (
@@ -1009,7 +1016,14 @@ def benchmark(M, provider):
         )
         bias = torch.randn((N), device="cuda", dtype=torch.float32).contiguous()
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+            lambda: linear_a8_w8_bfp32_ofp32(
+                a,
+                b,
+                bias,
+                torch.tensor(1.0, device="cuda"),
+                torch.tensor(1.0, device="cuda"),
+            ),
+            quantiles=quantiles,
         )
     if provider == "triton-i8-fp16":
         a = (
@@ -1024,7 +1038,14 @@ def benchmark(M, provider):
         )
         bias = torch.randn((N), device="cuda", dtype=torch.float16).contiguous()
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+            lambda: linear_a8_w8_bfp32_ofp32(
+                a,
+                b,
+                bias,
+                torch.tensor(1.0, device="cuda"),
+                torch.tensor(1.0, device="cuda"),
+            ),
+            quantiles=quantiles,
         )
 
     if provider == "triton-i8-bf16":
@@ -1040,11 +1061,18 @@ def benchmark(M, provider):
         )
         bias = torch.randn((N), device="cuda", dtype=torch.bfloat16).contiguous()
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: linear_a8_w8_bfp32_ofp32(a, b, bias, 1, 1), quantiles=quantiles
+            lambda: linear_a8_w8_bfp32_ofp32(
+                a,
+                b,
+                bias,
+                torch.tensor(1.0, device="cuda"),
+                torch.tensor(1.0, device="cuda"),
+            ),
+            quantiles=quantiles,
         )
     return ms, min_ms, max_ms
 
 
 if __name__ == "__main__":
     test_correct_int8()
-    benchmark.run(show_plots=False, print_data=True)
+    # benchmark.run(show_plots=False, print_data=True)
