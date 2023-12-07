@@ -1,7 +1,8 @@
 import torch
 
 from ..functional.fused import dq_add_layernorm_q_cpp
-from ..kernels.fused import fast_geluQ
+from ..functional.quantization import quantize_per_tensor_absmax
+from ..kernels.fused import fast_geluQ, linear_a8_w8_bfp32_ofp32_GeLu_Q
 
 
 class LayerNormQ(torch.nn.Module):
@@ -60,3 +61,67 @@ class GeLu_Q(torch.nn.Module):
 
     def forward(self, x):
         return fast_geluQ(x.to(torch.float32), self.a.item()).to(x.dtype)
+
+
+class W8A8BFP32OFP32_GeLu_Q(torch.nn.Module):
+    # For fc2 and out_proj
+    def __init__(self, in_features, out_features, alpha=1.0, beta=1.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.register_buffer(
+            "weight",
+            torch.randint(
+                -127,
+                127,
+                (self.out_features, self.in_features),
+                dtype=torch.int8,
+                requires_grad=False,
+            ),
+        )
+        self.register_buffer(
+            "bias",
+            torch.zeros((self.out_features), dtype=torch.float32, requires_grad=False),
+        )
+        self.register_buffer("a", torch.tensor(alpha))
+        self.register_buffer("b", torch.tensor(beta))
+
+    def _apply(self, fn):
+        # prevent the bias from being converted to half
+        super()._apply(fn)
+        self.bias = self.bias
+        return self
+
+    def to(self, *args, **kwargs):
+        super().to(*args, **kwargs)
+        self.weight = self.weight.to(*args, **kwargs)
+        self.bias = self.bias.to(*args, **kwargs)
+        self.bias = self.bias
+        return self
+
+    @torch.no_grad()
+    def forward(self, x):
+        x_shape = x.shape
+        x = x.view(-1, x_shape[-1])
+        self.bias = self.bias
+        y = linear_a8_w8_bfp32_ofp32_GeLu_Q(
+            x, self.weight, self.bias, self.a.item(), self.b.item()
+        )
+        y = y.view(*x_shape[:-1], -1)
+        return y
+
+    @staticmethod
+    def from_float(module: torch.nn.Linear, input_scale, out_scale):
+        int8_module = W8A8BFP32OFP32_GeLu_Q(module.in_features, module.out_features)
+        int8_weight, weight_scale = quantize_per_tensor_absmax(module.weight)
+        alpha = input_scale * weight_scale
+        int8_module.weight = int8_weight
+        int8_module.bias = module.bias.to(torch.float32)
+        int8_module.a = alpha
+        int8_module.input_scale = input_scale
+        int8_module.weight_scale = weight_scale
+        int8_module.b = torch.tensor(
+            1 / out_scale, dtype=int8_module.b.dtype, device=int8_module.b.device
+        )
+        return int8_module
