@@ -380,6 +380,315 @@ def layer_norm_fwd_fused_single_pass_q(
 
 
 @triton.jit
+def kernel_layer_norm_fwd_fused_single_pass(
+    out_ptr,
+    a_ptr,
+    weight_ptr,
+    bias_ptr,
+    output_row_stride,
+    output_col_stride,
+    a_row_stride,
+    a_col_stride,
+    N_SIZE,
+    eps,
+    HAS_BIAS: tl.constexpr,
+    IS_RMSNORM: tl.constexpr,
+    BLOCK_N_SIZE: tl.constexpr,
+):
+    """
+    Layernorm based on Welford's variance computation algorithm.
+    https://changyaochen.github.io/welford/
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+
+    :param output_ptr: output tensor
+    :param a_ptr: input tensor
+    :param weight_ptr: weights applied to the normalized input
+    :param bias_ptr: bias added to the normalized input
+    :param mean_ptr: save mean tensor for backward
+    :param rstd_ptr: save standard deviation tensor for backward
+    :param a_row_stride: stride of the input tensor
+    :param N_SIZE: number of elements per row in the input tensor
+    :param eps: epsilon value to avoid division by zero
+    :param HAS_BIAS: whether the bias is provided
+    :param IS_RMSNORM: whether the normalization is rmsnorm (False == layernorm)
+    :param BLOCK_N_SIZE: number of threads per block
+    :return: None
+    """
+    # position of elements processed by this program
+    row_idx = tl.program_id(0)
+
+    a_row_off = row_idx * a_row_stride
+    block_range_offs = tl.arange(0, BLOCK_N_SIZE)
+    # compute mean
+    mean = 0.0
+    var = 0.0
+    for block_n_start_idx in range(0, N_SIZE, BLOCK_N_SIZE):
+        n_end_off = min((block_n_start_idx + BLOCK_N_SIZE), N_SIZE)
+        block_cols_count = n_end_off - block_n_start_idx
+        col_offs = block_n_start_idx + block_range_offs
+        a_ptr_mask = col_offs < N_SIZE
+        # eviction policy below have little impact now because of new implementation. Kept as is.
+        # float32 is used to avoid overflow because of the square operation
+        a = tl.load(
+            a_ptr + a_row_off + col_offs * a_col_stride,
+            mask=a_ptr_mask,
+            other=0.0,
+            eviction_policy="evict_last",
+        ).to(tl.float32)
+        if IS_RMSNORM:
+            var += tl.sum(a * a, axis=0)
+        else:
+            block_mean = tl.sum(a, axis=0) / block_cols_count
+            # mean is 0 or has a mask applied to it, no need to mask delta_mean!
+            delta_mean = block_mean - mean
+            delta_mean_sqr = delta_mean * delta_mean
+
+            block_delta = tl.sum((a - block_mean) * a, axis=0)
+            # mean has a mask
+            mean += tl.sum((a - mean) * a_ptr_mask, axis=0) / n_end_off
+            var += (
+                block_delta
+                + delta_mean_sqr * (block_n_start_idx * block_cols_count) / n_end_off
+            )
+
+    var /= N_SIZE
+    rstd = 1 / tl.sqrt(var + eps)
+
+    # multiply by weight and add bias
+    for block_n_start_idx in range(0, N_SIZE, BLOCK_N_SIZE):
+        col_offs = block_n_start_idx + block_range_offs
+        a_ptr_mask = col_offs < N_SIZE
+        weight = tl.load(weight_ptr + col_offs, mask=a_ptr_mask)
+
+        # eviction policy helps to keep weights in cache (reused by other threads)
+        a = tl.load(
+            a_ptr + a_row_off + col_offs * a_col_stride,
+            mask=a_ptr_mask,
+            other=0.0,
+            eviction_policy="evict_first",
+        ).to(tl.float32)
+        a_hat = (a - mean) * rstd
+        out = a_hat * weight
+        if HAS_BIAS:
+            bias = tl.load(bias_ptr + col_offs, mask=a_ptr_mask)
+            out = out + bias
+        # write-back
+        tl.store(
+            out_ptr + row_idx * output_row_stride + col_offs * output_col_stride,
+            out.to(out_ptr.dtype.element_ty),
+            mask=a_ptr_mask,
+        )
+
+
+def layer_norm_fwd_fused_single_pass(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    eps: float,
+    use_rms_norm: bool = False,
+):
+    assert (
+        x.dtype == weight.dtype
+    ), f"input and weight bias must have the same dtype: {x.dtype}, {weight.dtype}"
+    if bias is not None:
+        assert (
+            x.dtype == bias.dtype
+        ), f"input and bias must have the same dtype: {x.dtype}, {bias.dtype}"
+    # catch eps being too small if the tensors are fp16
+    if x.dtype == torch.float16:
+        eps = max(eps, 1.6e-5)
+    # allocate output
+    out = torch.empty_like(x, dtype=x.dtype)
+    # reshape input data into 2D tensor
+    a_arg = x.reshape(-1, x.shape[-1])
+    M, N = a_arg.shape
+    # Less than 64KB per feature: enqueue fused kernel
+    MAX_FUSED_SIZE = 65536 // x.element_size()
+    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
+    BLOCK_SIZE = max(BLOCK_SIZE, 128)
+    BLOCK_SIZE = min(BLOCK_SIZE, 4096)
+    # heuristics for number of warps
+    num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+    kernel_layer_norm_fwd_fused_single_pass[(M,)](
+        out_ptr=out,
+        a_ptr=a_arg,
+        weight_ptr=weight,
+        bias_ptr=bias if bias is not None else a_arg,
+        output_row_stride=out.stride(-2),
+        output_col_stride=out.stride(-1),
+        a_row_stride=a_arg.stride(0),
+        a_col_stride=a_arg.stride(1),
+        N_SIZE=N,
+        eps=eps,
+        HAS_BIAS=bias is not None,
+        IS_RMSNORM=use_rms_norm,
+        BLOCK_N_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
+    )
+    return out
+
+
+@triton.jit
+def kernel_skip_layer_norm_fwd_fused_single_pass(
+    skip_out_ptr,
+    a_ptr,
+    b_ptr,
+    weight_ptr,
+    bias_ptr,
+    output_row_stride,
+    output_col_stride,
+    a_row_stride,
+    a_col_stride,
+    N_SIZE,
+    eps,
+    HAS_BIAS: tl.constexpr,
+    IS_RMSNORM: tl.constexpr,
+    BLOCK_N_SIZE: tl.constexpr,
+):
+    """
+    Layernorm based on Welford's variance computation algorithm.
+    https://changyaochen.github.io/welford/
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+
+    :param output_ptr: output tensor
+    :param a_ptr: input tensor
+    :param weight_ptr: weights applied to the normalized input
+    :param bias_ptr: bias added to the normalized input
+    :param mean_ptr: save mean tensor for backward
+    :param rstd_ptr: save standard deviation tensor for backward
+    :param a_row_stride: stride of the input tensor
+    :param N_SIZE: number of elements per row in the input tensor
+    :param eps: epsilon value to avoid division by zero
+    :param HAS_BIAS: whether the bias is provided
+    :param IS_RMSNORM: whether the normalization is rmsnorm (False == layernorm)
+    :param BLOCK_N_SIZE: number of threads per block
+    :return: None
+    """
+    # position of elements processed by this program
+    row_idx = tl.program_id(0)
+
+    a_row_off = row_idx * a_row_stride
+    block_range_offs = tl.arange(0, BLOCK_N_SIZE)
+    # compute mean
+    mean = 0.0
+    var = 0.0
+    for block_n_start_idx in range(0, N_SIZE, BLOCK_N_SIZE):
+        n_end_off = min((block_n_start_idx + BLOCK_N_SIZE), N_SIZE)
+        block_cols_count = n_end_off - block_n_start_idx
+        col_offs = block_n_start_idx + block_range_offs
+        a_ptr_mask = col_offs < N_SIZE
+        # eviction policy below have little impact now because of new implementation. Kept as is.
+        # float32 is used to avoid overflow because of the square operation
+        a = tl.load(
+            a_ptr + a_row_off + col_offs * a_col_stride,
+            mask=a_ptr_mask,
+            other=0.0,
+            eviction_policy="evict_last",
+        ).to(tl.float32)
+        if IS_RMSNORM:
+            var += tl.sum(a * a, axis=0)
+        else:
+            block_mean = tl.sum(a, axis=0) / block_cols_count
+            # mean is 0 or has a mask applied to it, no need to mask delta_mean!
+            delta_mean = block_mean - mean
+            delta_mean_sqr = delta_mean * delta_mean
+
+            block_delta = tl.sum((a - block_mean) * a, axis=0)
+            # mean has a mask
+            mean += tl.sum((a - mean) * a_ptr_mask, axis=0) / n_end_off
+            var += (
+                block_delta
+                + delta_mean_sqr * (block_n_start_idx * block_cols_count) / n_end_off
+            )
+
+    var /= N_SIZE
+    rstd = 1 / tl.sqrt(var + eps)
+
+    # multiply by weight and add bias
+    for block_n_start_idx in range(0, N_SIZE, BLOCK_N_SIZE):
+        col_offs = block_n_start_idx + block_range_offs
+        a_ptr_mask = col_offs < N_SIZE
+        weight = tl.load(weight_ptr + col_offs, mask=a_ptr_mask)
+
+        # eviction policy helps to keep weights in cache (reused by other threads)
+        a = tl.load(
+            a_ptr + a_row_off + col_offs * a_col_stride,
+            mask=a_ptr_mask,
+            other=0.0,
+            eviction_policy="evict_first",
+        ).to(tl.float32)
+        a_hat = (a - mean) * rstd
+        out = a_hat * weight
+        if HAS_BIAS:
+            bias = tl.load(bias_ptr + col_offs, mask=a_ptr_mask)
+            out = out + bias
+        # write-back
+        out_ = out.to(skip_out_ptr.dtype.element_ty)
+        b = tl.load(
+            b_ptr + a_row_off + col_offs * a_col_stride,
+            mask=a_ptr_mask,
+            other=0.0,
+            eviction_policy="evict_last",
+        )
+        tl.store(
+            skip_out_ptr + row_idx * output_row_stride + col_offs * output_col_stride,
+            (out_ + b),
+            mask=a_ptr_mask,
+        )
+
+
+def skip_layer_norm_fwd_fused_single_pass(
+    x: torch.Tensor,
+    skip: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    eps: float,
+    use_rms_norm: bool = False,
+):
+    assert (
+        x.dtype == weight.dtype
+    ), f"input and weight bias must have the same dtype: {x.dtype}, {weight.dtype}"
+    if bias is not None:
+        assert (
+            x.dtype == bias.dtype
+        ), f"input and bias must have the same dtype: {x.dtype}, {bias.dtype}"
+    # catch eps being too small if the tensors are fp16
+    if x.dtype == torch.float16:
+        eps = max(eps, 1.6e-5)
+    # allocate output
+    out = torch.empty_like(x, dtype=x.dtype)
+    # reshape input data into 2D tensor
+    a_arg = x.reshape(-1, x.shape[-1])
+    b_arg = skip.reshape(-1, skip.shape[-1])
+    M, N = a_arg.shape
+    # Less than 64KB per feature: enqueue fused kernel
+    MAX_FUSED_SIZE = 65536 // x.element_size()
+    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
+    BLOCK_SIZE = max(BLOCK_SIZE, 128)
+    BLOCK_SIZE = min(BLOCK_SIZE, 4096)
+    # heuristics for number of warps
+    num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+    kernel_skip_layer_norm_fwd_fused_single_pass[(M,)](
+        skip_out_ptr=out,
+        a_ptr=a_arg,
+        b_ptr=b_arg,
+        weight_ptr=weight,
+        bias_ptr=bias if bias is not None else a_arg,
+        output_row_stride=out.stride(-2),
+        output_col_stride=out.stride(-1),
+        a_row_stride=a_arg.stride(0),
+        a_col_stride=a_arg.stride(1),
+        N_SIZE=N,
+        eps=eps,
+        HAS_BIAS=bias is not None,
+        IS_RMSNORM=use_rms_norm,
+        BLOCK_N_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
+    )
+    return out
+
+
+@triton.jit
 def kernel_skip_layer_norm_fwd_fused_single_pass_2(
     output_ptr,
     skip_out_ptr,
@@ -561,3 +870,8 @@ if __name__ == "__main__":
     )
     print((torch_res_0 - triton_res_0).abs().max())
     print((torch_res_1 - triton_res_1).abs().max())
+
+    triton_res_0 = layer_norm_fwd_fused_single_pass(
+        a, layer.weight, layer.bias, 1e-5, False
+    )
+    print((torch_res_0 - triton_res_0).abs().max())
