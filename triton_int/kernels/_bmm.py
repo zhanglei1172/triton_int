@@ -114,7 +114,7 @@ def kernel_bmm_fp16t_fp16t_fp16t(
     tl.store(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask)
 
 
-def bmm_sfp16t_fp16t_fp16t(a, b, out=None):
+def bmm_fp16t_fp16t_fp16t(a, b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
     # a = a.view(-1, a.shape[-1])
