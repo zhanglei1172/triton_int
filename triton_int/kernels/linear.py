@@ -223,7 +223,7 @@ def kernel_linear_a8_w8_b8_o8(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
     c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     bias = tl.load(bias_ptrs)
-    c += bias[None, :] * tl.load(scale_b)
+    c += bias[None, :].to(tl.float32) * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -365,7 +365,7 @@ def kernel_linear_relu_a8_w8_b8_o8(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
     c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     bias = tl.load(bias_ptrs)
-    c += bias[None, :] * tl.load(scale_b)
+    c += bias[None, :].to(tl.float32) * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -645,7 +645,7 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
     c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     bias = tl.load(bias_ptrs)
-    c += bias[None, :] * tl.load(scale_b)
+    c += bias[None, :].to(tl.float32) * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -788,7 +788,7 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
     c = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     bias = tl.load(bias_ptrs)
-    c += bias[None, :] * tl.load(scale_b)
+    c += bias[None, :].to(tl.float32) * tl.load(scale_b)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
