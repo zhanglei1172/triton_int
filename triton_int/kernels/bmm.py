@@ -45,8 +45,7 @@ def kernel_bmm_s8t_s8t_s32t(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
-    pid_batch = tl.program_id(axis=2)
+    pid_batch = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -75,7 +74,7 @@ def kernel_bmm_s8t_s8t_s32t(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
         + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -137,7 +136,6 @@ def bmm_s8t_s8t_s32t(a, b, out=None):
         c = torch.empty((B, M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
         B,
     )
     kernel_bmm_s8t_s8t_s32t[grid](
@@ -197,8 +195,7 @@ def kernel_bmm_s8t_s8n_s32t(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
-    pid_batch = tl.program_id(axis=2)
+    pid_batch = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -227,7 +224,7 @@ def kernel_bmm_s8t_s8n_s32t(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
         + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -289,7 +286,6 @@ def bmm_s8t_s8n_s32t(a, b, out=None):
         c = torch.empty((B, M, N), device=a.device, dtype=torch.int32)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
         B,
     )
     kernel_bmm_s8t_s8n_s32t[grid](
@@ -350,8 +346,7 @@ def kernel_bmm_s8t_s8n_f32t(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
-    pid_batch = tl.program_id(axis=2)
+    pid_batch = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -380,7 +375,7 @@ def kernel_bmm_s8t_s8n_f32t(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
         + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -443,7 +438,6 @@ def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
         c = torch.empty((B, M, N), device=a.device, dtype=dtype)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
         B,
     )
     kernel_bmm_s8t_s8n_f32t[grid](
@@ -505,8 +499,7 @@ def kernel_bmm_s8t_s8n_s8t(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
-    pid_batch = tl.program_id(axis=2)
+    pid_batch = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -535,7 +528,7 @@ def kernel_bmm_s8t_s8n_s8t(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
         + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -593,7 +586,6 @@ def bmm_s8t_s8n_s8t(a, b, scale: float, out=None):
         c = torch.empty((B, M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
         B,
     )
     kernel_bmm_s8t_s8n_s8t[grid](
@@ -655,8 +647,7 @@ def kernel_bmm_s8t_s8t_s8t(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
-    pid_batch = tl.program_id(axis=2)
+    pid_batch = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -685,7 +676,7 @@ def kernel_bmm_s8t_s8t_s8t(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = (
         a_ptr
         + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -743,7 +734,6 @@ def bmm_s8t_s8t_s8t(a, b, scale: float, out=None):
         c = torch.empty((B, M, N), device=a.device, dtype=torch.int8)
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-        META["SPLIT_K"],
         B,
     )
     kernel_bmm_s8t_s8t_s8t[grid](

@@ -54,7 +54,6 @@ def kernel_linear_a8_w8_ofp32(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -83,7 +82,7 @@ def kernel_linear_a8_w8_ofp32(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     # -----------------------------------------------------------
@@ -182,7 +181,6 @@ def kernel_linear_a8_w8_b8_o8(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -211,7 +209,7 @@ def kernel_linear_a8_w8_b8_o8(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bias_ptrs = bias_ptr + offs_bn
@@ -324,7 +322,6 @@ def kernel_linear_relu_a8_w8_b8_o8(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -353,7 +350,7 @@ def kernel_linear_relu_a8_w8_b8_o8(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bias_ptrs = bias_ptr + offs_bn
@@ -465,7 +462,6 @@ def kernel_linear_a8_w8_b32_o32(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -494,7 +490,7 @@ def kernel_linear_a8_w8_b32_o32(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bias_ptrs = bias_ptr + offs_bn
@@ -604,7 +600,6 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -633,7 +628,7 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bias_ptrs = bias_ptr + offs_bn
@@ -747,7 +742,6 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
-    pid_sp_k = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -776,7 +770,7 @@ def kernel_linear_a8_w8_bfp32_ofp32(
         ),
         BLOCK_SIZE_M,
     )
-    offs_k = pid_sp_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bias_ptrs = bias_ptr + offs_bn
