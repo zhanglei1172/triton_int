@@ -7,7 +7,7 @@ from triton_int.kernels.utils import bmm_autotune
 
 @bmm_autotune()
 @triton.jit
-def kernel_bmm_sfp16t_sfp16t_sfp16t(
+def kernel_bmm_fp16t_fp16t_fp16t(
     # Pointers to matrices
     a_ptr,
     b_ptr,
@@ -114,7 +114,7 @@ def kernel_bmm_sfp16t_sfp16t_sfp16t(
     tl.store(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask)
 
 
-def bmm_sfp16t_sfp16t_sfp16t(a, b, out=None):
+def bmm_sfp16t_fp16t_fp16t(a, b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
     # a = a.view(-1, a.shape[-1])
@@ -131,7 +131,7 @@ def bmm_sfp16t_sfp16t_sfp16t(a, b, out=None):
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
         B,
     )
-    kernel_bmm_sfp16t_sfp16t_sfp16t[grid](
+    kernel_bmm_fp16t_fp16t_fp16t[grid](
         a,
         b,
         c,
@@ -161,5 +161,5 @@ if __name__ == "__main__":
     a = torch.randn(200, 4, 32, dtype=torch.float16, device="cuda")
     b = torch.randn(200, 32, 65536, dtype=torch.float16, device="cuda")
     torch_res = a @ b
-    triton_res = bmm_sfp16t_sfp16t_sfp16t(a, b)
+    triton_res = bmm_fp16t_fp16t_fp16t(a, b)
     print((torch_res - triton_res).abs().max())
