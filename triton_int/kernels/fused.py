@@ -351,7 +351,7 @@ def layer_norm_fwd_fused_single_pass_q(
     # allocate output
     out = torch.empty_like(x, dtype=torch.int8)
     # reshape input data into 2D tensor
-    a_arg = x.reshape(-1, x.shape[-1])
+    a_arg = x.view(-1, x.shape[-1])
     M, N = a_arg.shape
     # Less than 64KB per feature: enqueue fused kernel
     MAX_FUSED_SIZE = 65536 // x.element_size()
@@ -500,7 +500,7 @@ def layer_norm_fwd_fused_single_pass(
     # allocate output
     out = torch.empty_like(x, dtype=x.dtype)
     # reshape input data into 2D tensor
-    a_arg = x.reshape(-1, x.shape[-1])
+    a_arg = x.view(-1, x.shape[-1])
     M, N = a_arg.shape
     # Less than 64KB per feature: enqueue fused kernel
     MAX_FUSED_SIZE = 65536 // x.element_size()
@@ -658,8 +658,8 @@ def skip_layer_norm_fwd_fused_single_pass(
     # allocate output
     out = torch.empty_like(x, dtype=x.dtype)
     # reshape input data into 2D tensor
-    a_arg = x.reshape(-1, x.shape[-1])
-    b_arg = skip.reshape(-1, skip.shape[-1])
+    a_arg = x.view(-1, x.shape[-1])
+    b_arg = skip.view(-1, skip.shape[-1])
     M, N = a_arg.shape
     # Less than 64KB per feature: enqueue fused kernel
     MAX_FUSED_SIZE = 65536 // x.element_size()
@@ -825,8 +825,8 @@ def skip_layer_norm_fwd_fused_single_pass2(
     out = torch.empty_like(x, dtype=x.dtype)
     skip_out = torch.empty_like(x, dtype=x.dtype)
     # reshape input data into 2D tensor
-    a_arg = x.reshape(-1, x.shape[-1])
-    b_arg = skip.reshape(-1, skip.shape[-1])
+    a_arg = x.view(-1, x.shape[-1])
+    b_arg = skip.view(-1, skip.shape[-1])
     M, N = a_arg.shape
     # Less than 64KB per feature: enqueue fused kernel
     MAX_FUSED_SIZE = 65536 // x.element_size()
