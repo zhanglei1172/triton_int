@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton_int.kernels import register_torch_op
 
 from triton_int.kernels.utils import gemm_autotune_full
 
@@ -108,7 +109,7 @@ def kernel_linear_afp32_wfp32_bfp32_ofp32(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask)
 
-
+@register_torch_op
 def linear_afp32_wfp32_bfp32_ofp32(a, b, bias, out=None, dtype=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -160,4 +161,5 @@ if __name__ == "__main__":
     torch_res = layer(a)
     triton_res = linear_afp32_wfp32_bfp32_ofp32(a, layer.weight, layer.bias)
     
+    triton_res.contiguous()
     print((torch_res-triton_res).abs().max())

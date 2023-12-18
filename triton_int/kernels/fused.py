@@ -1,12 +1,13 @@
 import math
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import triton
 import triton.language as tl
 
 from triton_int.functional.quantization import quantize_per_tensor_absmax
+from triton_int.kernels import register_torch_op
 from triton_int.kernels.utils import gemm_autotune
 
 sqrt2pi = math.sqrt(2.0 / math.pi)
@@ -193,7 +194,8 @@ def kernel_linear_a8_w8_bfp32_ofp32_GeLu_Q(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-def linear_a8_w8_bfp32_ofp32_GeLu_Q(a, b, bias, scale_a, scale_b, out=None):
+@register_torch_op
+def linear_a8_w8_bfp32_ofp32_GeLu_Q(a: torch.Tensor, b: torch.Tensor, bias: torch.Tensor, scale_a: torch.Tensor, scale_b: torch.Tensor, out: torch.Tensor=None) -> torch.Tensor:
     # Check constraints.
     tmp_shape = a.shape[:-1]
     assert len(b.shape) == 2
@@ -331,10 +333,11 @@ def kernel_layer_norm_fwd_fused_single_pass_q(
         )
 
 
+@register_torch_op
 def layer_norm_fwd_fused_single_pass_q(
     x: torch.Tensor,
     weight: torch.Tensor,
-    bias: Optional[torch.Tensor],
+    bias: torch.Tensor,
     eps: float,
     use_rms_norm: bool = False,
 ):
@@ -480,10 +483,11 @@ def kernel_layer_norm_fwd_fused_single_pass(
         )
 
 
+@register_torch_op
 def layer_norm_fwd_fused_single_pass(
     x: torch.Tensor,
     weight: torch.Tensor,
-    bias: Optional[torch.Tensor],
+    bias: torch.Tensor,
     eps: float,
     use_rms_norm: bool = False,
 ):
@@ -637,11 +641,12 @@ def kernel_skip_layer_norm_fwd_fused_single_pass(
         )
 
 
+@register_torch_op
 def skip_layer_norm_fwd_fused_single_pass(
     x: torch.Tensor,
     skip: torch.Tensor,
     weight: torch.Tensor,
-    bias: Optional[torch.Tensor],
+    bias: torch.Tensor,
     eps: float,
     use_rms_norm: bool = False,
 ):
@@ -803,14 +808,15 @@ def kernel_skip_layer_norm_fwd_fused_single_pass_2(
         )
 
 
+@register_torch_op
 def skip_layer_norm_fwd_fused_single_pass2(
     x: torch.Tensor,
     skip: torch.Tensor,
     weight: torch.Tensor,
-    bias: Optional[torch.Tensor],
+    bias: torch.Tensor,
     eps: float,
     use_rms_norm: bool = False,
-):
+) -> tuple:
     assert (
         x.dtype == weight.dtype
     ), f"input and weight bias must have the same dtype: {x.dtype}, {weight.dtype}"
@@ -871,7 +877,7 @@ if __name__ == "__main__":
     print((torch_res_0 - triton_res_0).abs().max())
     print((torch_res_1 - triton_res_1).abs().max())
 
-    triton_res_0 = layer_norm_fwd_fused_single_pass(
+    triton_res_0 = torch.ops.triton_op.layer_norm_fwd_fused_single_pass(
         a, layer.weight, layer.bias, 1e-5, False
     )
     print((torch_res_0 - triton_res_0).abs().max())

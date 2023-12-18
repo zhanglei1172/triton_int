@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton_int.kernels import register_torch_op
 
 from triton_int.kernels.utils import bmm_autotune
 
@@ -113,7 +114,7 @@ def kernel_bmm_fp16t_fp16t_fp16t(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask)
 
-
+@register_torch_op
 def bmm_fp16t_fp16t_fp16t(a, b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]

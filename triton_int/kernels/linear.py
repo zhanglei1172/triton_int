@@ -2,6 +2,8 @@ import torch
 import triton
 import triton.language as tl
 
+from triton_int.kernels import register_torch_op
+
 try:
     from torch_int._CUDA import linear_a8_w8_b8_o8 as linear_a8_w8_b8_o8_cuda
     from torch_int._CUDA import linear_a8_w8_b32_o32 as linear_a8_w8_b32_o32_cuda
@@ -112,6 +114,7 @@ def kernel_linear_a8_w8_ofp32(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
+@register_torch_op
 def linear_a8_w8_ofp32(a, b, scale, out=None, dtype=torch.float):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -250,7 +253,7 @@ def kernel_linear_a8_w8_b8_o8(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c.to(tl.int8), mask=c_mask)
 
-
+@register_torch_op
 def linear_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -392,7 +395,7 @@ def kernel_linear_relu_a8_w8_b8_o8(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, tl.maximum(c.to(tl.int8), 0), mask=c_mask)
 
-
+@register_torch_op
 def linear_relu_a8_w8_b8_o8(a, b, bias, scale_a: float, scale_b: float, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -530,7 +533,7 @@ def kernel_linear_a8_w8_b32_o32(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
-
+@register_torch_op
 def linear_a8_w8_b32_o32(a, b, bias, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -670,7 +673,7 @@ def kernel_linear_a8_w8_b32_o32_with_scaling(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c.to(tl.int32), mask=c_mask)
 
-
+@register_torch_op
 def linear_a8_w8_b32_o32_with_scaling(a, b, bias, scale_a, scale_b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -813,7 +816,7 @@ def kernel_linear_a8_w8_bfp32_ofp32(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
 
-
+@register_torch_op
 def linear_a8_w8_bfp32_ofp32(a, b, bias, scale_a, scale_b, out=None, dtype=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]

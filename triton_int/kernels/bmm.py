@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 
 from triton_int.functional.quantization import quantize_per_tensor_absmax
+from triton_int.kernels import register_torch_op
 from triton_int.kernels.utils import bmm_autotune
 
 
@@ -121,6 +122,7 @@ def kernel_bmm_s8t_s8t_s32t(
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
+@register_torch_op
 def bmm_s8t_s8t_s32t(a, b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -271,6 +273,7 @@ def kernel_bmm_s8t_s8n_s32t(
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
+@register_torch_op
 def bmm_s8t_s8n_s32t(a, b, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -422,7 +425,7 @@ def kernel_bmm_s8t_s8n_f32t(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c.to(c_ptr.dtype.element_ty), mask=c_mask)
 
-
+@register_torch_op
 def bmm_s8t_s8n_f32t(a, b, scale: float, out=None, dtype=torch.float32):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -570,7 +573,7 @@ def kernel_bmm_s8t_s8n_s8t(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
-
+@register_torch_op
 def bmm_s8t_s8n_s8t(a, b, scale: float, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
@@ -718,7 +721,7 @@ def kernel_bmm_s8t_s8t_s8t(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
-
+@register_torch_op
 def bmm_s8t_s8t_s8t(a, b, scale: float, out=None):
     # Check constraints.
     tmp_shape = a.shape[:-1]
